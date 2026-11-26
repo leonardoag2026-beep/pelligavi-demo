@@ -104,8 +104,10 @@ scripts/            utilitários de operação (demo do banco, URL do túnel)
 
 ## O banco
 
-**36 tabelas**, **8 views**, **11 functions**, **6 procedures** e **10 triggers**. Alguns exemplos
-do que está dentro dele, e não no código da aplicação:
+**36 tabelas**, **8 views**, **11 functions**, **6 procedures** e **10 triggers**. A API chama esses
+objetos em vez de repetir a regra no Node: os relatórios leem as views, o desconto vem de
+`calcular_desconto`, o cancelamento passa por `cancelar_pedido`, o fechamento por `fechar_caixa` e a
+anonimização por `anonimizar_cliente`. Alguns exemplos do que está dentro dele:
 
 - `registrar_pedido` — grava pedido e itens numa transação, com o preço pelo sabor mais caro
 - `avancar_status` — transição de status com histórico e notificação, por trigger
