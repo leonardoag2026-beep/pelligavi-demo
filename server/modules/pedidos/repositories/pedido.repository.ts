@@ -1,4 +1,9 @@
 import { query, transacao, um } from '../../../config/db.js';
+import { ValidacaoError } from '../../../shared/errors/app-error.js';
+
+// as procedures levantam EXCEPTION com a mensagem de negócio: ela vai para a tela
+const mensagemDoBanco = (erro: unknown): string =>
+  erro instanceof Error && erro.message ? erro.message : 'Não foi possível concluir a operação';
 
 export interface ItemEntrada {
   nome: string;
@@ -159,12 +164,7 @@ export const pedidoRepository = {
         );
       }
 
-      await cliente.query(
-        `INSERT INTO historico_status (id_pedido, id_status)
-         SELECT $1, id_status FROM status_pedido WHERE nome = $2`,
-        [pedido.id, dados.status],
-      );
-
+      // o histórico do status inicial é gravado pelo gatilho trg_pedido_ai_historico
       return pedido.numero;
     });
 
@@ -173,24 +173,44 @@ export const pedidoRepository = {
     return criado;
   },
 
+  // o histórico de cada mudança é gravado pelo gatilho trg_pedido_au_historico;
+  // cancelamento passa pela procedure, que valida até onde o pedido pode ser cancelado
   mudarStatus: async (numero: number, status: string, motivo: string | null): Promise<PedidoLinha | null> => {
     await transacao(async (cliente) => {
       const { rows } = await cliente.query<{ id: number }>(
-        `UPDATE pedido
-            SET id_status = (SELECT id_status FROM status_pedido WHERE nome = $2)
-          WHERE numero = $1
-        RETURNING id_pedido AS id`,
-        [numero, status],
+        'SELECT id_pedido AS id FROM pedido WHERE numero = $1',
+        [numero],
       );
       const pedido = rows[0];
       if (!pedido) return;
+
+      if (status === 'Cancelado') {
+        try {
+          await cliente.query('CALL cancelar_pedido($1, $2)', [pedido.id, motivo ?? '']);
+        } catch (erro) {
+          throw new ValidacaoError(mensagemDoBanco(erro));
+        }
+        return;
+      }
+
       await cliente.query(
-        `INSERT INTO historico_status (id_pedido, id_status, motivo)
-         SELECT $1, id_status, $3 FROM status_pedido WHERE nome = $2`,
-        [pedido.id, status, motivo],
+        `UPDATE pedido
+            SET id_status = (SELECT id_status FROM status_pedido WHERE nome = $2)
+          WHERE id_pedido = $1`,
+        [pedido.id, status],
       );
     });
     return pedidoRepository.porNumero(numero);
+  },
+
+  // a faixa de desconto é regra de negócio do banco (calcular_desconto); aqui só
+  // convertemos a resposta para centavos, que é a unidade da API
+  descontoCentavos: async (subtotalCentavos: number): Promise<number> => {
+    const linha = await um<{ desconto: number }>(
+      `SELECT ROUND(calcular_desconto($1::numeric / 100) * 100)::int AS desconto`,
+      [subtotalCentavos],
+    );
+    return linha?.desconto ?? 0;
   },
 
   // o servidor recalcula taxa e desconto: o cliente manda o pedido, não o preço

@@ -98,11 +98,8 @@ export const caixaService = {
     if (!aberto) throw new NaoEncontradoError('Nenhum caixa aberto');
 
     const movimento = await caixaRepository.movimento(aberto.abertaEm);
-    const total = movimento?.total ?? 0;
-    const esperado = aberto.valorInicial + total;
 
-    await caixaRepository.fechar(aberto.id, {
-      valorEsperado: esperado,
+    await caixaRepository.fecharPorProcedure(aberto.id, {
       valorContado: Math.max(0, Math.round(valorContado)),
       porForma: movimento?.porForma ?? {},
       observacao: observacao.trim() || null,

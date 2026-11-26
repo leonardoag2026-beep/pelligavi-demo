@@ -550,22 +550,40 @@ SELECT p.data_hora::DATE          AS dia,
  WHERE s.nome <> 'Cancelado'
  GROUP BY p.data_hora::DATE;
 
--- RF18: itens mais vendidos (cada sabor de um meio a meio conta a quantidade do item)
+-- RF18: itens mais vendidos. Conta as duas formas de item que existem no banco:
+-- a normalizada (item_pedido_produto, sabores e adicionais) e a que o site grava
+-- (item_pedido.nome/detalhe/tipo/composicao). Cada sabor de um meio a meio conta a
+-- quantidade do item, e o valor é dividido entre os sabores para não somar duas vezes.
+DROP VIEW IF EXISTS vw_itens_mais_vendidos;
 CREATE OR REPLACE VIEW vw_itens_mais_vendidos AS
-SELECT pr.id_produto,
-       pr.nome                        AS produto,
-       c.nome                         AS categoria,
-       sum(ip.quantidade)             AS quantidade_vendida,
-       count(DISTINCT ip.id_pedido)   AS qtd_pedidos
-  FROM item_pedido_produto ipp
-  JOIN item_pedido ip  ON ip.id_item_pedido = ipp.id_item_pedido
-  JOIN pedido pe       ON pe.id_pedido      = ip.id_pedido
-  JOIN status_pedido s ON s.id_status       = pe.id_status
-  JOIN produto pr      ON pr.id_produto     = ipp.id_produto
-  JOIN categoria c     ON c.id_categoria    = pr.id_categoria
+WITH base AS (
+    SELECT ip.id_item_pedido,
+           ip.id_pedido,
+           ip.quantidade,
+           ip.preco_unitario,
+           ip.nome,
+           ip.tipo,
+           (SELECT count(*) FROM item_pedido_produto x
+             WHERE x.id_item_pedido = ip.id_item_pedido) AS n_produtos
+      FROM item_pedido ip
+)
+SELECT pe.data_hora::DATE                          AS dia,
+       COALESCE(pr.id_produto, 0)                    AS id_produto,
+       COALESCE(pr.nome, b.nome, b.tipo, 'Item')      AS produto,
+       COALESCE(c.nome, b.tipo, 'Item')               AS categoria,
+       sum(b.quantidade)                              AS quantidade_vendida,
+       sum(round(b.preco_unitario * b.quantidade / GREATEST(b.n_produtos, 1), 2)) AS valor_vendido,
+       count(DISTINCT b.id_pedido)                    AS qtd_pedidos
+  FROM base b
+  JOIN pedido pe           ON pe.id_pedido      = b.id_pedido
+  JOIN status_pedido s     ON s.id_status       = pe.id_status
+  LEFT JOIN item_pedido_produto ipp ON ipp.id_item_pedido = b.id_item_pedido
+  LEFT JOIN produto pr     ON pr.id_produto     = ipp.id_produto
+  LEFT JOIN categoria c    ON c.id_categoria    = pr.id_categoria
  WHERE s.nome <> 'Cancelado'
- GROUP BY pr.id_produto, pr.nome, c.nome
- ORDER BY quantidade_vendida DESC, produto;
+   AND COALESCE(pr.nome, b.nome, b.tipo) IS NOT NULL
+ GROUP BY 1, 2, 3, 4
+ ORDER BY dia, quantidade_vendida DESC, produto;
 
 -- RF18: vendas por forma de pagamento (por dia do pagamento)
 CREATE OR REPLACE VIEW vw_vendas_por_forma_pagamento AS
@@ -625,34 +643,53 @@ SELECT pe.id_pedido,
               GROUP BY id_pedido) pg ON pg.id_pedido = pe.id_pedido;
 
 -- RF12: fila da cozinha - pedidos Recebido/Em preparo por ordem de chegada, com itens,
--- meio a meio, adicionais e observações.
+-- meio a meio, adicionais e observações. Lê o item normalizado quando existe e, quando
+-- não existe (itens gravados pelo site), usa nome/detalhe do próprio item.
+DROP VIEW IF EXISTS vw_fila_cozinha;
 CREATE OR REPLACE VIEW vw_fila_cozinha AS
+WITH item AS (
+    SELECT ip.id_item_pedido,
+           ip.id_pedido,
+           ip.quantidade,
+           ip.observacao,
+           ip.nome,
+           ip.detalhe,
+           t.nome AS tamanho,
+           (SELECT count(*) FROM item_pedido_produto x
+             WHERE x.id_item_pedido = ip.id_item_pedido) AS n_produtos,
+           (SELECT string_agg(pr.nome, ' / ' ORDER BY pr.nome)
+              FROM item_pedido_produto x
+              JOIN produto pr   ON pr.id_produto   = x.id_produto
+              JOIN categoria c  ON c.id_categoria  = pr.id_categoria
+             WHERE x.id_item_pedido = ip.id_item_pedido AND c.nome <> 'Adicional') AS sabores,
+           (SELECT string_agg(pr.nome, ', ' ORDER BY pr.nome)
+              FROM item_pedido_produto x
+              JOIN produto pr   ON pr.id_produto   = x.id_produto
+              JOIN categoria c  ON c.id_categoria  = pr.id_categoria
+             WHERE x.id_item_pedido = ip.id_item_pedido AND c.nome = 'Adicional') AS adicionais
+      FROM item_pedido ip
+      JOIN tamanho t ON t.id_tamanho = ip.id_tamanho
+)
 SELECT pe.id_pedido,
        pe.data_hora,
        s.nome      AS status,
        tp.nome     AS tipo,
        pe.nome_cliente,
-       string_agg(it.descricao, ' | ' ORDER BY it.id_item_pedido) AS itens
+       string_agg(
+           i.quantidade || 'x ' ||
+           CASE WHEN i.n_produtos > 0 THEN i.tamanho ELSE '' END ||
+           CASE WHEN i.n_produtos > 0 THEN ': ' || COALESCE(i.sabores, '')
+                ELSE COALESCE(i.nome, '') ||
+                     CASE WHEN i.detalhe IS NOT NULL THEN ' (' || i.detalhe || ')' ELSE '' END
+           END ||
+           CASE WHEN i.n_produtos > 1 THEN ' (meio a meio)' ELSE '' END ||
+           COALESCE(' + ' || i.adicionais, '') ||
+           COALESCE(' [obs: ' || i.observacao || ']', ''),
+           ' | ' ORDER BY i.id_item_pedido) AS itens
   FROM pedido pe
   JOIN status_pedido s ON s.id_status = pe.id_status
   JOIN tipo_pedido tp  ON tp.id_tipo  = pe.id_tipo
-  LEFT JOIN (SELECT ip.id_item_pedido,
-                    ip.id_pedido,
-                    ip.quantidade || 'x ' || t.nome || ': ' ||
-                    COALESCE(string_agg(CASE WHEN c.nome <> 'Adicional' THEN pr.nome END,
-                                        ' / ' ORDER BY pr.nome), '') ||
-                    CASE WHEN count(CASE WHEN c.nome <> 'Adicional' THEN 1 END) > 1
-                         THEN ' (meio a meio)' ELSE '' END ||
-                    COALESCE(' + ' || string_agg(CASE WHEN c.nome = 'Adicional' THEN pr.nome END,
-                                                 ', ' ORDER BY pr.nome), '') ||
-                    COALESCE(' [obs: ' || ip.observacao || ']', '') AS descricao
-               FROM item_pedido ip
-               JOIN tamanho t  ON t.id_tamanho = ip.id_tamanho
-               JOIN item_pedido_produto ipp ON ipp.id_item_pedido = ip.id_item_pedido
-               JOIN produto pr  ON pr.id_produto  = ipp.id_produto
-               JOIN categoria c ON c.id_categoria = pr.id_categoria
-              GROUP BY ip.id_item_pedido, ip.id_pedido, ip.quantidade, ip.observacao, t.nome) it
-         ON it.id_pedido = pe.id_pedido
+  LEFT JOIN item i     ON i.id_pedido = pe.id_pedido
  WHERE s.nome IN ('Recebido', 'Em preparo')
  GROUP BY pe.id_pedido, pe.data_hora, s.nome, tp.nome, pe.nome_cliente
  ORDER BY pe.data_hora, pe.id_pedido;

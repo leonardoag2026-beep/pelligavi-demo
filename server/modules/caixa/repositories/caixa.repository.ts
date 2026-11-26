@@ -1,4 +1,8 @@
 import { query, um } from '../../../config/db.js';
+import { ValidacaoError } from '../../../shared/errors/app-error.js';
+
+const mensagemDoBanco = (erro: unknown): string =>
+  erro instanceof Error && erro.message ? erro.message : 'Não foi possível fechar o caixa';
 
 export interface CaixaLinha {
   id: number;
@@ -39,6 +43,24 @@ export const caixaRepository = {
       [valorInicial],
     );
     return linha!.id;
+  },
+
+  // a conta do fechamento (fundo + dinheiro do período) é da procedure fechar_caixa;
+  // aqui só completamos o que é do app: detalhe por forma e observação
+  fecharPorProcedure: async (id: number, dados: {
+    valorContado: number;
+    porForma: Record<string, number>;
+    observacao: string | null;
+  }): Promise<void> => {
+    try {
+      await query('CALL fechar_caixa($1, $2::numeric / 100, NULL, NULL)', [id, dados.valorContado]);
+    } catch (erro) {
+      throw new ValidacaoError(mensagemDoBanco(erro));
+    }
+    await query(
+      `UPDATE caixa SET por_forma = $2::jsonb, observacao = $3 WHERE id_caixa = $1`,
+      [id, JSON.stringify(dados.porForma), dados.observacao],
+    );
   },
 
   fechar: async (id: number, dados: {

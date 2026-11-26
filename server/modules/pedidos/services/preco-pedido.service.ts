@@ -93,8 +93,8 @@ export const precoPedidoService = {
     const regra = await pedidoRepository.regraDeCobranca();
     const gratis = regra.freteGratisAcima > 0 && subtotal >= regra.freteGratisAcima;
     const taxa = tipo === 'entrega' && !gratis ? regra.taxaBase : 0;
-    const faixa = regra.faixas.find((f) => subtotal >= f.minimo) ?? null;
-    const desconto = faixa ? Math.round((subtotal * faixa.percentual) / 100) : 0;
+    // a faixa de desconto é do banco: mesma function que a procedure de pedido usa
+    const desconto = await pedidoRepository.descontoCentavos(subtotal);
     return { subtotal, taxa, desconto, total: subtotal + taxa - desconto };
   },
 

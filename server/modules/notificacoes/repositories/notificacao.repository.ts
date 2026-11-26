@@ -11,16 +11,13 @@ export interface NotificacaoLinha {
   criadaEm: string;
 }
 
+// a lista vem da view vw_notificacoes, que já agrupa Hoje / Ontem / Nesta semana
 const SELECT_NOTIFICACAO = `
   SELECT id_notificacao                                        AS id,
          tipo, titulo, texto, meta, lida,
-         CASE
-           WHEN criada_em::date = CURRENT_DATE THEN 'Hoje'
-           WHEN criada_em::date = CURRENT_DATE - 1 THEN 'Ontem'
-           ELSE to_char(criada_em, 'DD/MM')
-         END                                                   AS grupo,
+         grupo,
          to_char(criada_em, 'YYYY-MM-DD"T"HH24:MI:SS')          AS "criadaEm"
-    FROM notificacao
+    FROM vw_notificacoes
 `;
 
 export const notificacaoRepository = {
@@ -34,8 +31,14 @@ export const notificacaoRepository = {
     return linhas[0]?.total ?? 0;
   },
 
-  marcarLida: (id: number) =>
-    query(`UPDATE notificacao SET lida = TRUE WHERE id_notificacao = $1 AND lida = FALSE`, [id]),
+  // quem marca é a procedure marcar_notificacao_lida, que valida a existência
+  marcarLida: async (id: number) => {
+    try {
+      await query('CALL marcar_notificacao_lida($1)', [id]);
+    } catch {
+      return;
+    }
+  },
 
   marcarTodas: () => query(`UPDATE notificacao SET lida = TRUE WHERE lida = FALSE`),
 

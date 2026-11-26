@@ -146,8 +146,8 @@ export const pedidoService = {
     const regra = await pedidoRepository.regraDeCobranca();
     const gratis = regra.freteGratisAcima > 0 && subtotal >= regra.freteGratisAcima;
     const taxa = dados.tipo === 'entrega' && !gratis ? regra.taxaBase : 0;
-    const faixa = regra.faixas.find((f) => subtotal >= f.minimo) ?? null;
-    const desconto = faixa ? Math.round((subtotal * faixa.percentual) / 100) : 0;
+    // desconto pela function do banco; total fecha a mesma conta do CHECK ck_pedido_total
+    const desconto = await pedidoRepository.descontoCentavos(subtotal);
     const total = subtotal + taxa - desconto;
 
     const linha = await pedidoRepository.criar({

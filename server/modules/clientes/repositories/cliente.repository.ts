@@ -1,4 +1,8 @@
 import { query, transacao, um } from '../../../config/db.js';
+import { NaoEncontradoError } from '../../../shared/errors/app-error.js';
+
+const mensagemDoBanco = (erro: unknown): string =>
+  erro instanceof Error && erro.message ? erro.message : 'Não foi possível anonimizar o cliente';
 
 export interface ClienteLinha {
   id: number;
@@ -77,18 +81,20 @@ export const clienteRepository = {
     }
   },
 
+  // LGPD: a limpeza de dados pessoais (cliente, pedidos e endereços) é da procedure
+  // anonimizar_cliente; depois marcamos a data e limpamos os endereços em texto do app
   anonimizar: async (id: number, rotulo: string): Promise<number> => {
-    const linhas = await query<{ id: number }>(
-      `UPDATE cliente
-          SET nome = $2, telefone = NULL, anonimizado = TRUE, anonimizado_em = NOW()
-        WHERE id_cliente = $1
-        RETURNING id_cliente AS id`,
+    try {
+      await query('CALL anonimizar_cliente($1)', [id]);
+    } catch (erro) {
+      throw new NaoEncontradoError(mensagemDoBanco(erro));
+    }
+    await query(
+      `UPDATE cliente SET nome = $2, anonimizado_em = NOW() WHERE id_cliente = $1`,
       [id, rotulo],
     );
-    if (linhas.length) {
-      await query(`DELETE FROM cliente_endereco_texto WHERE id_cliente = $1`, [id]);
-    }
-    return linhas.length;
+    await query(`DELETE FROM cliente_endereco_texto WHERE id_cliente = $1`, [id]);
+    return 1;
   },
 
   total: () => um<{ total: number }>(`SELECT COUNT(*)::int AS total FROM cliente`),
