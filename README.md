@@ -95,11 +95,11 @@ server/
   config/           conexão com o PostgreSQL e variáveis
   modules/          14 módulos: pedidos, cardápio, ingredientes, caixa, pagamentos, custos,
                     clientes, funcionários, relatórios, notificações, crm, geo, config, auth
-  repositories/     acesso ao banco (uma consulta por caso de uso)
+                    (cada módulo com routes, controllers, services, repositories e schemas)
   shared/           rotas, tipos e utilidades comuns
-web/                o site em React (features, pages, shared)
-src/                versão estática da loja, servida em /antigo
-scripts/            utilitários de build
+  uploads/          modelos 3D, texturas e imagens servidos em /modelos, /texturas e /imagens
+web/                o site em React 19 + Vite (api, features, pages, shared)
+scripts/            utilitários de operação (demo do banco, URL do túnel)
 ```
 
 ## O banco
