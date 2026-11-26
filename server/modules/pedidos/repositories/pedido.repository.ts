@@ -164,6 +164,20 @@ export const pedidoRepository = {
         );
       }
 
+      // conferência: o total que o Node gravou tem que bater com o que o banco
+      // calcula a partir dos itens (pega divergência de subtotal, que o CHECK não vê)
+      const { rows: conferencia } = await cliente.query<{ total: number }>(
+        'SELECT calcular_total_pedido($1)::float8 AS total',
+        [pedido.id],
+      );
+      const totalBanco = Math.round(Number(conferencia[0]?.total ?? 0) * 100);
+      if (Math.abs(totalBanco - dados.total) > 1) {
+        throw new ValidacaoError(
+          `Total inconsistente: calculado R$ ${(totalBanco / 100).toFixed(2)}, ` +
+            `gravado R$ ${(dados.total / 100).toFixed(2)}`,
+        );
+      }
+
       // o histórico do status inicial é gravado pelo gatilho trg_pedido_ai_historico
       return pedido.numero;
     });

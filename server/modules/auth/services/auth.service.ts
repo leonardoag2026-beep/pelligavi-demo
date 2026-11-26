@@ -1,3 +1,4 @@
+import { um } from '../../../config/db.js';
 import { NaoAutorizadoError } from '../../../shared/errors/app-error.js';
 import { assinar } from '../../../shared/security/jwt.js';
 import { conferirSenha } from '../../../shared/security/senha.js';
@@ -18,6 +19,8 @@ export const authService = {
       throw new NaoAutorizadoError('E-mail ou senha incorretos');
     }
     const { token } = assinar({ sub: String(gerente.id), nome: gerente.nome });
+    // manutenção: apaga sessões vencidas ou revogadas (a function vive no banco)
+    await um<{ limpas: number }>('SELECT limpar_sessoes_vencidas() AS limpas').catch(() => null);
     return { token, gerente: { id: gerente.id, nome: gerente.nome, email: gerente.email } };
   },
 
