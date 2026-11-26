@@ -1,0 +1,6 @@
+.env
+*.log
+dist/
+dist-server/
+node_modules/
+preview/
