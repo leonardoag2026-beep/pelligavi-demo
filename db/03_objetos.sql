@@ -56,16 +56,21 @@ BEGIN
     RETURN COALESCE(v_preco, 0.00);
 END $$;
 
--- RF06/RF09: total = subtotal dos itens + taxa de entrega do tipo - desconto.
--- Mesma regra gravada por registrar_pedido (o CHECK ck_pedido_total garante a coerência).
+-- RF06/RF09: total = subtotal dos itens + taxa de entrega - desconto.
+-- A taxa é a da configuração da loja (loja_config), respeitando o frete grátis acima do
+-- valor anunciado; retirada e balcão não cobram entrega. É a mesma conta que a API faz,
+-- e o CHECK ck_pedido_total garante a coerência na gravação.
 CREATE OR REPLACE FUNCTION calcular_total_pedido(p_id_pedido INTEGER)
 RETURNS NUMERIC
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
     v_subtotal NUMERIC;
-    v_taxa     NUMERIC;
+    v_taxa     NUMERIC := 0;
+    v_exige    BOOLEAN;
+    v_cfg_taxa NUMERIC;
+    v_cfg_gratis NUMERIC;
 BEGIN
-    SELECT t.taxa_base INTO v_taxa
+    SELECT t.exige_endereco INTO v_exige
       FROM pedido p
       JOIN tipo_pedido t ON t.id_tipo = p.id_tipo
      WHERE p.id_pedido = p_id_pedido;
@@ -77,6 +82,16 @@ BEGIN
     SELECT COALESCE(sum(quantidade * preco_unitario), 0) INTO v_subtotal
       FROM item_pedido
      WHERE id_pedido = p_id_pedido;
+
+    IF COALESCE(v_exige, FALSE) THEN
+        SELECT COALESCE(taxa_base, 0) / 100.0, COALESCE(frete_gratis_acima, 0) / 100.0
+          INTO v_cfg_taxa, v_cfg_gratis
+          FROM loja_config WHERE id_config = 1;
+
+        IF NOT (v_cfg_gratis > 0 AND v_subtotal >= v_cfg_gratis) THEN
+            v_taxa := COALESCE(v_cfg_taxa, 0);
+        END IF;
+    END IF;
 
     RETURN v_subtotal + v_taxa - calcular_desconto(v_subtotal);
 END $$;
@@ -117,21 +132,37 @@ CREATE TRIGGER trg_pedido_au_historico
 
 -- RF08: endereço obrigatório quando o tipo exige. Só em INSERT: a anonimização (RF05)
 -- zera entrega_* de pedidos de entrega já existentes e não pode ser barrada.
+-- O site grava o endereço completo em entrega_logradouro e deixa número/bairro/cidade
+-- nulos; quando esses campos vêm preenchidos (pedido do balcão, importação), também
+-- são conferidos. Exigir os quatro sempre barraria todo pedido do site.
 CREATE OR REPLACE FUNCTION fn_trg_pedido_endereco() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 DECLARE
     v_exige BOOLEAN;
+    v_tem_partes BOOLEAN;
 BEGIN
     SELECT exige_endereco INTO v_exige FROM tipo_pedido WHERE id_tipo = NEW.id_tipo;
 
-    IF COALESCE(v_exige, FALSE) AND (
-           NEW.entrega_logradouro IS NULL OR trim(NEW.entrega_logradouro) = ''
-        OR NEW.entrega_numero     IS NULL OR trim(NEW.entrega_numero)     = ''
-        OR NEW.entrega_bairro     IS NULL OR trim(NEW.entrega_bairro)     = ''
-        OR NEW.entrega_cidade     IS NULL OR trim(NEW.entrega_cidade)     = '') THEN
+    IF NOT COALESCE(v_exige, FALSE) THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.entrega_logradouro IS NULL OR trim(NEW.entrega_logradouro) = '' THEN
         RAISE EXCEPTION 'Endereço de entrega obrigatório para este tipo de pedido'
             USING ERRCODE = '45000';
     END IF;
+
+    v_tem_partes := (NEW.entrega_numero IS NOT NULL AND trim(NEW.entrega_numero) <> '')
+                 OR (NEW.entrega_bairro IS NOT NULL AND trim(NEW.entrega_bairro) <> '');
+
+    IF v_tem_partes AND (
+           NEW.entrega_numero IS NULL OR trim(NEW.entrega_numero) = ''
+        OR NEW.entrega_bairro IS NULL OR trim(NEW.entrega_bairro) = ''
+        OR NEW.entrega_cidade IS NULL OR trim(NEW.entrega_cidade) = '') THEN
+        RAISE EXCEPTION 'Endereço incompleto: número, bairro e cidade andam juntos'
+            USING ERRCODE = '45000';
+    END IF;
+
     RETURN NEW;
 END $$;
 
