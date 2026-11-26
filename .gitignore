@@ -1,6 +1,8 @@
-.env
-*.log
 dist/
 dist-server/
+.env
+*.log
 node_modules/
 preview/
+*.tsbuildinfo
+web/tsconfig.tsbuildinfo
